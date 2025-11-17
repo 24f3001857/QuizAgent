@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+groq
+httpx
+playwright
+pdfplumber
+Pillow
+google.generativeai
