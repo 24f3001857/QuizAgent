@@ -8,6 +8,7 @@ venv/
 .venv/
 env/
 .env/
+.pytest_cache/
 
 # IDEs
 .vscode/
@@ -17,6 +18,7 @@ env/
 .DS_Store
 .Trashes
 Thumbs.db
+updated_folder_structure.txt
 
 # Logs and temporary files
 *.log
