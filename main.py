@@ -129,25 +129,29 @@ def extract_submit_url(html_content: str) -> Optional[str]:
     """
     Extracts the submission URL from HTML content, prioritizing regex and falling back to an LLM.
     """
-    # 1. Clean the HTML by removing <pre> blocks to avoid confusion with example URLs.
-    cleaned_html = re.sub(r'<pre>.*?</pre>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+    # 1. Split at <pre> to ignore example payloads
+    # Using case-insensitive split to be safe
+    parts = re.split(r'<pre>', html_content, flags=re.IGNORECASE)
+    instruction_part = parts[0]
 
     # 2. Try a series of regex patterns from most specific to most general.
     patterns = [
         # Pattern for: "Post your answer to <strong>URL</strong>"
         r'Post your answer to\s+<strong>\s*(https?://[^\s<]+)\s*</strong>',
         # Pattern for: "Post your answer to URL with this JSON payload"
-        r'Post your answer to\s+(https?://[^\s<]+)\s+with this JSON payload',
-        # General pattern for: "Post your answer to URL"
+        # We want to capture the URL until whitespace or <
         r'Post your answer to\s+(https?://[^\s<]+)',
         # Pattern for: "Submit to: <code>URL</code>"
         r'Submit to:\s*<code>\s*(https?://[^\s<]+)\s*</code>'
     ]
 
     for i, pattern in enumerate(patterns):
-        match = re.search(pattern, cleaned_html, re.IGNORECASE)
+        match = re.search(pattern, instruction_part, re.IGNORECASE)
         if match:
             url = match.group(1).strip()
+            # Clean up trailing punctuation
+            if url.endswith('.'):
+                url = url[:-1]
             logger.info(f"[Regex-{i+1}] Extracted URL: {url}")
             return url
 
