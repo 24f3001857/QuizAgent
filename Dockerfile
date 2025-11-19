@@ -5,11 +5,8 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-# System dependencies for potential OCR/PDF features
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    poppler-utils \
-    tesseract-ocr \
-    && rm -rf /var/lib/apt/lists/*
+# System dependencies
+# (None currently needed for pure Python logic)
 
 # Install Python dependencies
 COPY requirements.txt /app/requirements.txt
@@ -21,4 +18,4 @@ COPY main.py /app/main.py
 
 # Expose port and run
 EXPOSE 8080
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
