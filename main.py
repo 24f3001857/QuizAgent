@@ -73,9 +73,9 @@ async def query_groq(client: httpx.AsyncClient, prompt: str, json_mode: bool = T
     if not GROQ_API_KEY: return None
     try:
         payload = {
-            "model": "llama-3.1-70b-versatile",
+            "model": "llama-3.3-70b-versatile",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0
+            "temperature": 0.1
         }
         if json_mode: payload["response_format"] = {"type": "json_object"}
 
@@ -129,24 +129,28 @@ def extract_submit_url(html_content: str) -> Optional[str]:
     """
     Extracts the submission URL from HTML content, prioritizing regex and falling back to an LLM.
     """
-    # 1. Split at <pre> to ignore example payloads
+    # 1. Split at <pre> (handling attributes) to ignore example payloads
     # Using case-insensitive split to be safe
-    parts = re.split(r'<pre>', html_content, flags=re.IGNORECASE)
+    parts = re.split(r'<pre[^>]*>', html_content, flags=re.IGNORECASE)
     instruction_part = parts[0]
+    
+    # Debug log to see what we are searching in
+    # logger.info(f"Searching for URL in: {instruction_part[:200]}...")
 
     # 2. Try a series of regex patterns from most specific to most general.
     patterns = [
         # Pattern for: "Post your answer to <strong>URL</strong>"
         r'Post your answer to\s+<strong>\s*(https?://[^\s<]+)\s*</strong>',
-        # Pattern for: "Post your answer to URL with this JSON payload"
-        # We want to capture the URL until whitespace or <
+        # Pattern for: "Post your answer to URL" (Standard)
         r'Post your answer to\s+(https?://[^\s<]+)',
+        # Loose pattern: "answer to ... URL" (Handles extra words/newlines)
+        r'answer to.*?((?:https?://|/)[^\s<]+)',
         # Pattern for: "Submit to: <code>URL</code>"
         r'Submit to:\s*<code>\s*(https?://[^\s<]+)\s*</code>'
     ]
 
     for i, pattern in enumerate(patterns):
-        match = re.search(pattern, instruction_part, re.IGNORECASE)
+        match = re.search(pattern, instruction_part, re.IGNORECASE | re.DOTALL)
         if match:
             url = match.group(1).strip()
             # Clean up trailing punctuation
