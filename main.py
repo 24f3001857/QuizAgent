@@ -27,10 +27,6 @@ MY_EMAIL = os.getenv("MY_EMAIL", "test@example.com")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-IS_DOCKER = os.getenv("DOCKER_TESTING", "false").lower() in ("1", "true", "yes")
-DEFAULT_BASE = "http://host.docker.internal:8001" if IS_DOCKER else "http://localhost:8001"
-BASE_URL = os.getenv("BASE_URL", DEFAULT_BASE)
-
 # Setup Gemini
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -77,16 +73,16 @@ async def query_groq(client: httpx.AsyncClient, prompt: str, json_mode: bool = T
     if not GROQ_API_KEY: return None
     try:
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": "llama-3.1-70b-versatile",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1
+            "temperature": 0.0
         }
         if json_mode: payload["response_format"] = {"type": "json_object"}
 
         response = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json=payload, timeout=15.0
+            json=payload, timeout=20.0
         )
         
         if response.status_code != 200:
@@ -95,6 +91,7 @@ async def query_groq(client: httpx.AsyncClient, prompt: str, json_mode: bool = T
 
         content = response.json()["choices"][0]["message"]["content"]
         if json_mode:
+            # Clean up potential markdown formatting
             content = re.sub(r"```json\s*", "", content)
             content = re.sub(r"```\s*$", "", content)
             return json.loads(content)
@@ -114,11 +111,12 @@ async def answer_image_gemini(client: httpx.AsyncClient, img_url: str, question_
         prompt = f"""
         Analyze this image and answer the question embedded in this text: "{question_context}".
         Return a JSON object with a single key "answer".
-        Example: {{"answer": "A red cat"}}
+        Example: {{'answer': 'A red cat'}}
         """
         response = await model.generate_content_async([prompt, img])
         
         text = response.text
+        # Clean up potential markdown formatting
         text = re.sub(r"```json\s*", "", text)
         text = re.sub(r"```\s*$", "", text)
         data = json.loads(text)
@@ -126,6 +124,36 @@ async def answer_image_gemini(client: httpx.AsyncClient, img_url: str, question_
     except Exception as e:
         logger.error(f"[Gemini] Error: {e}")
         return "Error processing image"
+
+def extract_submit_url(html_content: str) -> Optional[str]:
+    """
+    Extracts the submission URL from HTML content, prioritizing regex and falling back to an LLM.
+    """
+    # 1. Clean the HTML by removing <pre> blocks to avoid confusion with example URLs.
+    cleaned_html = re.sub(r'<pre>.*?</pre>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # 2. Try a series of regex patterns from most specific to most general.
+    patterns = [
+        # Pattern for: "Post your answer to <strong>URL</strong>"
+        r'Post your answer to\s+<strong>\s*(https?://[^\s<]+)\s*</strong>',
+        # Pattern for: "Post your answer to URL with this JSON payload"
+        r'Post your answer to\s+(https?://[^\s<]+)\s+with this JSON payload',
+        # General pattern for: "Post your answer to URL"
+        r'Post your answer to\s+(https?://[^\s<]+)',
+        # Pattern for: "Submit to: <code>URL</code>"
+        r'Submit to:\s*<code>\s*(https?://[^\s<]+)\s*</code>'
+    ]
+
+    for i, pattern in enumerate(patterns):
+        match = re.search(pattern, cleaned_html, re.IGNORECASE)
+        if match:
+            url = match.group(1).strip()
+            logger.info(f"[Regex-{i+1}] Extracted URL: {url}")
+            return url
+
+    logger.warning("All regex patterns failed to find a submission URL.")
+    return None
+
 
 # --- AGENT LOGIC ---
 async def run_agent_chain(start_url: str, email: str, secret: str):
@@ -142,44 +170,47 @@ async def run_agent_chain(start_url: str, email: str, secret: str):
 
             try:
                 resp = await client.get(current_url)
-                if resp.status_code >= 400: break
-            except Exception: break
+                if resp.status_code >= 400:
+                    logger.error(f"Failed to fetch {current_url}, status: {resp.status_code}")
+                    break
+            except Exception as e:
+                logger.error(f"Exception fetching {current_url}: {e}")
+                break
 
             page_text = resp.text
-            b64_match = re.search(r'atob\([\"\']([A-Za-z0-9+/=]+)[\"\']\)', page_text)
+            b64_match = re.search(r'atob(["\\]\[A-Za-z0-9+/=]+["\\]\])', page_text)
             page_inner = base64.b64decode(b64_match.group(1)).decode(errors="ignore") if b64_match else page_text
 
-            # Extract Navigation - Remove <pre> blocks first to avoid extracting example URLs
-            page_clean = re.sub(r'<pre>.*?</pre>', '', page_inner, flags=re.DOTALL | re.IGNORECASE)
-            
-            submit_url = None
-            # Pattern: "Post your answer to URL"
-            m_plain = re.search(r'Post your answer to\s+(https?://[^\s<]+)', page_clean, re.IGNORECASE)
-            if m_plain:
-                submit_url = m_plain.group(1).strip()
-                logger.info(f"[Regex] Extracted URL: {submit_url}")
+            # --- URL EXTRACTION ---
+            submit_url = extract_submit_url(page_inner)
 
-            # Fallback: LLM if regex fails
+            # LLM Fallback if all regex fails
             if not submit_url:
-                logger.info("[LLM Fallback] Regex failed, using LLM to extract URL")
-                nav_data = await query_groq(client, f"Analyze HTML. Return JSON {{'url': '...'}} for submission. HTML: {page_clean[-3000:]}")
-                submit_url = nav_data.get("url") if nav_data else None
+                logger.info("[LLM Fallback] Using LLM to extract submission URL.")
+                prompt = f"""
+                You are an expert web agent. Your task is to find the **submission URL** from the provided HTML snippet.
+                The submission URL is the URL where the answer should be POSTed. It's usually in a phrase like 'Post your answer to...'.
+                **Crucially, you must IGNORE any URLs found inside `<pre>` or `<code>` tags**, as they are examples for the user.
+                Return a JSON object with a single key "submit_url".
+
+                HTML:
+                {page_inner[-3000:]}
+                """
+                nav_data = await query_groq(client, prompt)
+                submit_url = nav_data.get("submit_url") if nav_data else None
                 if submit_url:
                     logger.info(f"[LLM] Extracted URL: {submit_url}")
 
-            if submit_url:
-                submit_url = urljoin(current_url, submit_url)
-                logger.info(f"[Final] Resolved URL: {submit_url}")
-            if not submit_url: break
+            if not submit_url:
+                logger.error("Could not determine submission URL. Ending chain.")
+                break
+            
+            submit_url = urljoin(current_url, submit_url)
+            logger.info(f"[Final] Resolved URL: {submit_url}")
 
-            # Extract file links
-            file_links = re.findall(r'(https?://[^"\s<]+|/files/[^"\s<]+)', page_inner)
-            norm_files = []
-            for link in file_links:
-                if link.startswith("/"):
-                    norm_files.append(urljoin(current_url, link))
-                elif link.startswith("http"):
-                    norm_files.append(link)
+            # --- FILE & ANSWER LOGIC ---
+            file_links = re.findall(r'href\s*=\s*["\\](https?://[^"\\]+|/files/[^"\\]+)["\\]', page_inner)
+            norm_files = [urljoin(current_url, link) for link in file_links]
             
             answer = None
             csv_url = next((f for f in norm_files if ".csv" in f.lower()), None)
@@ -194,40 +225,75 @@ async def run_agent_chain(start_url: str, email: str, secret: str):
                 logger.info(f"Image found: {img_url}. Sending to Gemini.")
                 answer = await answer_image_gemini(client, img_url, page_inner[-1000:])
             else:
+                # If no files, assume it's a simple text question
                 qa_data = await query_groq(client, f"Answer question in text. Return JSON {{'answer': '...'}}. Text: {page_inner[-2000:]}")
                 answer = qa_data.get("answer") if qa_data else "start"
 
-            # Submit
+            # --- SUBMISSION ---
             try:
+                logger.info(f"Submitting answer: {answer}")
                 post_resp = await client.post(submit_url, json={"email": email, "secret": secret, "url": current_url, "answer": answer})
+                
+                if post_resp.status_code != 200:
+                    logger.error(f"Submission to {submit_url} failed with status {post_resp.status_code}: {post_resp.text}")
+                    break
+
                 res = post_resp.json()
+                logger.info(f"Submission response: {res}")
+                
                 if res.get("correct"):
                     current_url = res.get("url")
-                    if not current_url: break
+                    if not current_url:
+                        logger.info("Quiz complete!")
+                        break
                 else:
+                    logger.warning(f"Answer was incorrect: {res.get('reason')}. Stopping.")
                     break
-            except Exception: break
+            except Exception as e:
+                logger.error(f"Exception during submission: {e}")
+                break
 
-# --- HELPERS ---
+# --- TASK-SPECIFIC HELPERS ---
 async def answer_csv_sum(client, url):
     try:
+        logger.info(f"Processing CSV: {url}")
         resp = await client.get(url)
         lines = resp.text.strip().splitlines()
         if len(lines) < 2: return 0
-        header = lines[0].lower().split(',')
-        idx = next((i for i, h in enumerate(header) if "population" in h or "value" in h), len(header)-1)
+        
+        header = [h.lower().strip() for h in lines[0].split(',')]
+        # Find the most likely 'value' column
+        value_col_name = next((c for c in header if c in ["value", "sales", "amount", "price"]), None)
+        if not value_col_name:
+            # If no obvious name, assume the last column is the value
+            idx = len(header) - 1
+        else:
+            idx = header.index(value_col_name)
+
         total = 0
         for row in lines[1:]:
             cols = row.split(',')
             if len(cols) > idx:
-                val = re.sub(r"[^0-9\-]", "", cols[idx])
-                if val: total += int(val)
-        return total
-    except: return 0
+                val_str = re.sub(r"[^
+0-9."]", "", cols[idx])
+                if val_str:
+                    try:
+                        total += float(val_str)
+                    except ValueError:
+                        continue # Skip rows where conversion fails
+        return round(total)
+    except Exception as e:
+        logger.error(f"Error processing CSV {url}: {e}")
+        return 0
 
 async def answer_txt_secret(client, url):
     try:
+        logger.info(f"Processing TXT/PDF: {url}")
         resp = await client.get(url)
-        m = re.search(r"['\"]([A-Za-z\-]+)['\"]", resp.text)
-        return m.group(1) if m else "unknown"
-    except: return "error"
+        # Look for a word in quotes, common for secrets
+        m = re.search(r"the secret word is ['\"]([A-Za-z0-9\-]+)['\"]", resp.text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        
+        # Fallback for any quoted word
+        m2 = re.search(r
