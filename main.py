@@ -143,8 +143,10 @@ def extract_submit_url(html_content: str) -> Optional[str]:
         r'Post your answer to\s+<strong>\s*(https?://[^\s<]+)\s*</strong>',
         # Pattern for: "Post your answer to URL" (Standard)
         r'Post your answer to\s+(https?://[^\s<]+)',
-        # Loose pattern: "answer to ... URL" (Handles extra words/newlines)
+        # Loose pattern: "answer to ... URL" (Handles extra words/newlines/nbsp)
         r'answer to.*?((?:https?://|/)[^\s<]+)',
+        # Very loose fallback: just look for the URL in the instruction part if it contains "mock-submit"
+        r'((?:https?://|/)[^\s<]*mock-submit[^\s<]*)',
         # Pattern for: "Submit to: <code>URL</code>"
         r'Submit to:\s*<code>\s*(https?://[^\s<]+)\s*</code>'
     ]
