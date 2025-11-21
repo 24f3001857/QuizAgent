@@ -192,7 +192,7 @@ async def run_agent_chain(start_url: str, email: str, secret: str):
                 break
 
             page_text = resp.text
-            b64_match = re.search(r'atob\([\'"]([A-Za-z0-9+/=]+)[\'"]\)', page_text)
+            b64_match = re.search(r'atob\([\'"`]([A-Za-z0-9+/=]+)[\'"`]\)', page_text)
             page_inner = base64.b64decode(b64_match.group(1)).decode(errors="ignore") if b64_match else page_text
 
             # --- URL EXTRACTION ---
