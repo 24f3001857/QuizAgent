@@ -15,7 +15,8 @@ The agent can scrape web pages, extract text from documents like PDFs and CSVs, 
     - **Google Gemini 1.5 Flash**: Employs Google's powerful multimodal model to analyze and answer questions about images.
 - **Intelligent Task Routing**: Automatically detects the type of data (text, image, PDF, etc.) and routes the task to the appropriate AI model.
 - **Recursive Quiz Solving**: Capable of solving an entire chain of quizzes, automatically proceeding to the next URL upon a successful or directed submission.
-- **Robust Error Handling**: Manages API failures and continues the quiz chain even if an answer is incorrect but a new URL is provided.
+- **Versatile Answer Formats**: Supports various answer formats including plain text, JSON objects, Base64 data URIs, and booleans.
+- **Robust Error Handling**: Manages API failures, 404 errors, and LLM hallucinations, ensuring the agent fails gracefully or retries when appropriate.
 - **Dockerized**: Comes with a `Dockerfile` for easy containerization and deployment, including all necessary system dependencies.
 
 ## Architecture Flow
@@ -105,23 +106,23 @@ This project includes a comprehensive end-to-end test suite that simulates the e
 ### 1. Install Testing Dependencies
 The testing requirements are included in `requirements.txt` but if you need to install them separately:
 ```bash
-pip install pytest pytest-asyncio httpx
+pip install pytest pytest-asyncio httpx python-dotenv
 ```
 
 ### 2. Run the Test Suite
 To run all tests, including the full end-to-end quiz chain simulation, run the following command from the project root:
 
 ```bash
-pytest -v
+pytest tests/test_main.py -v
 ```
 
 The test suite will:
-1. Start the main application server.
-2. Start the mock quiz server.
-3. Send an initial request to the agent to start the quiz chain.
-4. Assert that the agent correctly navigates every step of the chain (including text, CSV, image, and retry logic).
-5. Test error handling for 404 and 422 HTTP errors.
-6. Test edge cases like broken data links and LLM failures.
+1.  **Mock Server**: Interact with a local mock server (running on port 8001) that simulates the quiz chain.
+2.  **Agent Verification**: Verify the agent's ability to navigate the chain, handle different file types (CSV, PDF, Image), and submit answers in various formats.
+3.  **Error Handling**: Test graceful failure for broken links (404) and confusing content (LLM failure).
+4.  **Railway Integration**: Can be configured to test against a live Railway deployment using Ngrok.
+
+For detailed testing instructions, see [tests/README.md](tests/README.md).
 
 ### Docker Deployment
 The included `Dockerfile` is optimized for deployment on cloud platforms like Google Cloud Run.
@@ -138,5 +139,13 @@ Run the Docker container:
 docker run -p 8080:8080 --env-file .env llm-quiz-agent
 ```
 The application will be accessible at `http://localhost:8080`.
+
+### Railway Deployment
+This project is ready for deployment on Railway.
+
+1.  **Connect GitHub**: Connect your GitHub repository to Railway.
+2.  **Environment Variables**: Add the required environment variables (`GROQ_API_KEY`, `GOOGLE_API_KEY`, `MY_EMAIL`, `MY_SECRET`) in the Railway dashboard.
+3.  **Deploy**: Railway will automatically build and deploy the application using the `Dockerfile`.
+4.  **Public URL**: Railway will provide a public URL (e.g., `https://your-app.up.railway.app`) which serves as the entry point for the agent.
 
 ```
