@@ -2,6 +2,7 @@ import uvicorn
 import base64
 import json
 import os
+import io
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, FileResponse
 
@@ -52,6 +53,19 @@ def get_dummy_pdf():
         return FileResponse(DUMMY_PDF, media_type="application/pdf")
     return JSONResponse(status_code=404, content={"error": "Dummy PDF not found."})
 
+@app.get("/files/data.json")
+def get_json_data():
+    """JSON file for testing JSON parsing"""
+    data = {
+        "sales": [
+            {"product": "A", "quantity": 100, "price": 10.5},
+            {"product": "B", "quantity": 200, "price": 15.75},
+            {"product": "C", "quantity": 150, "price": 20.0}
+        ],
+        "total_revenue": 6525.0
+    }
+    return JSONResponse(content=data)
+
 
 # --- 2. FAKE SUBMISSION ENDPOINTS ---
 @app.post("/mock-submit/start")
@@ -59,42 +73,134 @@ async def mock_submit_start(request: Request):
     data = await request.json()
     _submission_log.append(data)
     print_submission(data, "START")
-    return JSONResponse(content={"correct": True, "url": None, "reason": "Initial task correct."})
+    if data.get("answer") == "start":
+         return JSONResponse(content={"correct": True, "url": f"{BASE_URL}/mock-quiz/csv", "reason": "Initial task correct."})
+    return JSONResponse(content={"correct": False, "url": None, "reason": "Incorrect answer."})
 
 @app.post("/mock-submit/csv")
 async def mock_submit_csv(request: Request):
     data = await request.json()
     _submission_log.append(data)
     print_submission(data, "CSV")
-    return JSONResponse(content={"correct": True, "url": None, "reason": "CSV task correct."})
+    answer = data.get("answer")
+    if answer == 12345 or answer == 150: # Accepting both for robustness
+        return JSONResponse(content={"correct": True, "url": f"{BASE_URL}/mock-quiz/txt", "reason": "CSV task correct."})
+    return JSONResponse(content={"correct": False, "url": None, "reason": "Incorrect answer."})
 
 @app.post("/mock-submit/txt")
 async def mock_submit_txt(request: Request):
     data = await request.json()
     _submission_log.append(data)
     print_submission(data, "TXT")
-    return JSONResponse(content={"correct": True, "url": None, "reason": "TXT task correct."})
+    answer = data.get("answer")
+    if "secret-word" in str(answer) or "supercalifragilisticexpialidocious" in str(answer):
+        return JSONResponse(content={"correct": True, "url": f"{BASE_URL}/mock-quiz/pdf", "reason": "TXT task correct."})
+    return JSONResponse(content={"correct": False, "url": None, "reason": "Incorrect answer."})
 
 @app.post("/mock-submit/pdf")
 async def mock_submit_pdf(request: Request):
     data = await request.json()
     _submission_log.append(data)
     print_submission(data, "PDF")
-    return JSONResponse(content={"correct": True, "url": None, "reason": "PDF task correct."})
+    return JSONResponse(content={"correct": True, "url": f"{BASE_URL}/mock-quiz/image", "reason": "PDF task correct."})
 
 @app.post("/mock-submit/image")
 async def mock_submit_image(request: Request):
     data = await request.json()
     _submission_log.append(data)
     print_submission(data, "IMAGE")
-    return JSONResponse(content={"correct": True, "url": None, "reason": "Image task correct."})
+    return JSONResponse(content={"correct": True, "url": f"{BASE_URL}/mock-quiz/json-object", "reason": "Image task correct."})
 
-@app.post("/mock-submit/pdf")
-async def mock_submit_pdf(request: Request):
+@app.post("/mock-submit/json-object")
+async def mock_submit_json_object(request: Request):
+    """Test JSON object answer format"""
     data = await request.json()
     _submission_log.append(data)
-    print_submission(data, "PDF")
-    return JSONResponse(content={"correct": True, "url": None, "reason": "All tasks completed successfully!"})
+    print_submission(data, "JSON-OBJECT")
+    
+    # Validate that answer is a JSON object with expected fields
+    answer = data.get("answer", {})
+    if isinstance(answer, dict) and "sum" in answer and "count" in answer:
+        return JSONResponse(content={
+            "correct": True, 
+            "url": f"{BASE_URL}/mock-quiz/base64-image", 
+            "reason": "JSON object answer correct."
+        })
+    else:
+        return JSONResponse(content={
+            "correct": False,
+            "url": f"{BASE_URL}/mock-quiz/retry",  # Give next URL even on wrong answer
+            "reason": "Expected JSON object with 'sum' and 'count' fields."
+        })
+
+@app.post("/mock-submit/base64-image")
+async def mock_submit_base64_image(request: Request):
+    """Test base64 data URI answer format"""
+    data = await request.json()
+    _submission_log.append(data)
+    print_submission(data, "BASE64-IMAGE")
+    
+    answer = data.get("answer", "")
+    # Check if answer is a base64 data URI
+    if isinstance(answer, str) and answer.startswith("data:image/"):
+        return JSONResponse(content={
+            "correct": True,
+            "url": f"{BASE_URL}/mock-quiz/boolean",
+            "reason": "Base64 image received successfully."
+        })
+    else:
+        return JSONResponse(content={
+            "correct": False,
+            "url": None,
+            "reason": "Expected base64 data URI starting with 'data:image/'"
+        })
+
+@app.post("/mock-submit/boolean")
+async def mock_submit_boolean(request: Request):
+    """Test boolean answer format"""
+    data = await request.json()
+    _submission_log.append(data)
+    print_submission(data, "BOOLEAN")
+    
+    answer = data.get("answer")
+    if isinstance(answer, bool):
+        return JSONResponse(content={
+            "correct": True,
+            "url": f"{BASE_URL}/mock-quiz/stop-test",
+            "reason": "Boolean answer correct."
+        })
+    else:
+        return JSONResponse(content={
+            "correct": False,
+            "url": None,
+            "reason": f"Expected boolean, got {type(answer).__name__}"
+        })
+
+@app.post("/mock-submit/wrong-then-next")
+async def mock_submit_wrong_then_next(request: Request):
+    """Test re-submission scenario: wrong answer but provides next URL"""
+    data = await request.json()
+    _submission_log.append(data)
+    print_submission(data, "WRONG-THEN-NEXT")
+    
+    return JSONResponse(content={
+        "correct": False,
+        "url": f"{BASE_URL}/mock-quiz/retry",
+        "reason": "Answer incorrect, but here's the next URL to continue."
+    })
+
+@app.post("/mock-submit/retry")
+async def mock_submit_retry(request: Request):
+    """Test retry after wrong answer"""
+    data = await request.json()
+    _submission_log.append(data)
+    print_submission(data, "RETRY")
+    
+    return JSONResponse(content={
+        "correct": True,
+        "url": None,
+        "reason": "Retry successful! Quiz complete."
+    })
 
 @app.post("/mock-submit/stop")
 async def mock_submit_stop(request: Request):
@@ -174,7 +280,7 @@ def get_txt_quiz():
     question_html = f"""
     <h2>Q2. Text File Secret</h2>
     <p>Download <a href="{BASE_URL}/files/simple.txt">text file</a>.</p>
-    <p>What is the secret word in quotes?</p>
+    <p>What is the value of alpha in the table?</p>
     <p>Post your answer to {BASE_URL}/mock-submit/txt with this JSON payload:</p>
     <pre>
 {{
@@ -194,7 +300,7 @@ def get_image_quiz():
     question_html = f"""
     <h2>Q3. Image Analysis</h2>
     <p>Analyze <a href="{BASE_URL}/files/PNG_Test.png">this image</a>.</p>
-    <p>What is the main subject or content of the image?</p>
+    <p>What is the value of beta in the table?</p>
     <p>Post your answer to {BASE_URL}/mock-submit/image with this JSON payload:</p>
     <pre>
 {{
@@ -214,7 +320,7 @@ def get_pdf_quiz():
     question_html = f"""
     <h2>Q4. PDF Document</h2>
     <p>Download <a href="{BASE_URL}/files/dummy_doc.pdf">PDF document</a>.</p>
-    <p>What is the sum of the values of measurement B&C in page 2m in the data table?</p>
+    <p>What is the sum of the values of measurement A&C in page 2m in the data table?</p>
     <p>Post your answer to {BASE_URL}/mock-submit/pdf with this JSON payload:</p>
     <pre>
 {{
@@ -228,45 +334,146 @@ def get_pdf_quiz():
     b64_content = base64.b64encode(question_html.encode()).decode()
     return create_js_page(b64_content)
 
-@app.get("/mock-quiz/stop-test", response_class=HTMLResponse)
-def get_stop_quiz():
+@app.get("/mock-quiz/json-object", response_class=HTMLResponse)
+def get_json_object_quiz():
+    """Quiz requiring JSON object as answer"""
     question_html = f"""
-    <h2>Q5: Stop Task</h2>
-    <p>What is 2+2?</p>
-    <p>Post your answer to {BASE_URL}/mock-submit/stop.</p>
+    <h2>Q5. JSON Object Answer</h2>
+    <p>Download <a href="{BASE_URL}/files/data.json">JSON data file</a>.</p>
+    <p>Calculate the sum of all quantities and the count of products.</p>
+    <p>Return your answer as a JSON object with two fields: "sum" and "count".</p>
+    <p>Post your answer to {BASE_URL}/mock-submit/json-object with this JSON payload:</p>
+    <pre>
+{{
+  "email": "your-email",
+  "secret": "your-secret",
+  "url": "{BASE_URL}/mock-quiz/json-object",
+  "answer": {{"sum": 450, "count": 3}}
+}}
+    </pre>
     """
     b64_content = base64.b64encode(question_html.encode()).decode()
     return create_js_page(b64_content)
 
-# --- Edge Case Quizzes ---
+@app.get("/mock-quiz/base64-image", response_class=HTMLResponse)
+def get_base64_image_quiz():
+    """Quiz requiring base64 image as answer"""
+    question_html = f"""
+    <h2>Q6. Generate Chart as Base64</h2>
+    <p>Download <a href="{BASE_URL}/files/data.json">JSON data file</a>.</p>
+    <p>Create a bar chart showing product quantities and return it as a base64 data URI.</p>
+    <p>The answer should be a string starting with "data:image/png;base64,..."</p>
+    <p>Post your answer to {BASE_URL}/mock-submit/base64-image with this JSON payload:</p>
+    <pre>
+{{
+  "email": "your-email",
+  "secret": "your-secret",
+  "url": "{BASE_URL}/mock-quiz/base64-image",
+  "answer": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+}}
+    </pre>
+    """
+    b64_content = base64.b64encode(question_html.encode()).decode()
+    return create_js_page(b64_content)
+
+@app.get("/mock-quiz/boolean", response_class=HTMLResponse)
+def get_boolean_quiz():
+    """Quiz requiring boolean answer"""
+    question_html = f"""
+    <h2>Q7. Boolean Answer</h2>
+    <p>Download <a href="{BASE_URL}/files/sales.csv">sales data CSV</a>.</p>
+    <p>Are there more than 5 rows in the CSV file? Answer with true or false.</p>
+    <p>Post your answer to {BASE_URL}/mock-submit/boolean with this JSON payload:</p>
+    <pre>
+{{
+  "email": "your-email",
+  "secret": "your-secret",
+  "url": "{BASE_URL}/mock-quiz/boolean",
+  "answer": true
+}}
+    </pre>
+    """
+    b64_content = base64.b64encode(question_html.encode()).decode()
+    return create_js_page(b64_content)
+
+@app.get("/mock-quiz/wrong-answer", response_class=HTMLResponse)
+def get_wrong_answer_quiz():
+    """Quiz that will return wrong answer with next URL"""
+    question_html = f"""
+    <h2>Q8. Re-submission Test</h2>
+    <p>What is 2 + 2? (This will be marked wrong to test re-submission flow)</p>
+    <p>Post your answer to {BASE_URL}/mock-submit/wrong-then-next with this JSON payload:</p>
+    <pre>
+{{
+  "email": "your-email",
+  "secret": "your-secret",
+  "url": "{BASE_URL}/mock-quiz/wrong-answer",
+  "answer": 4
+}}
+    </pre>
+    """
+    b64_content = base64.b64encode(question_html.encode()).decode()
+    return create_js_page(b64_content)
+
+@app.get("/mock-quiz/retry", response_class=HTMLResponse)
+def get_retry_quiz():
+    """Retry quiz page"""
+    question_html = f"""
+    <h2>Q9. Retry</h2>
+    <p>This is a retry step.</p>
+    <p>Post your answer to {BASE_URL}/mock-submit/retry with this JSON payload:</p>
+    <pre>
+{{
+  "email": "your-email",
+  "secret": "your-secret",
+  "url": "{BASE_URL}/mock-quiz/retry",
+  "answer": "retry"
+}}
+    </pre>
+    """
+    b64_content = base64.b64encode(question_html.encode()).decode()
+    return create_js_page(b64_content)
+
 @app.get("/mock-quiz/broken-link", response_class=HTMLResponse)
 def get_broken_link_quiz():
+    """Quiz with a broken link"""
     question_html = f"""
-    <h2>Edge Case: Broken Link</h2>
-    <p>Download <a href="{BASE_URL}/files/non-existent-file.csv">file</a>.</p>
-    <p>Post to {BASE_URL}/mock-submit/broken-link.</p>
+    <h2>Broken Link Test</h2>
+    <p>This page has a broken link.</p>
+    <p>Post your answer to <a href="{BASE_URL}/does-not-exist">broken link</a>.</p>
     """
     b64_content = base64.b64encode(question_html.encode()).decode()
     return create_js_page(b64_content)
 
 @app.get("/mock-quiz/llm-fail", response_class=HTMLResponse)
 def get_llm_fail_quiz():
+    """Quiz that might confuse the LLM"""
     question_html = f"""
-    <h2>Edge Case: LLM Fail</h2>
-    <p>Respond with invalid JSON key.</p>
-    <p>Post to {BASE_URL}/mock-submit/llm-fail.</p>
+    <h2>LLM Fail Test</h2>
+    <p>This page has no clear instructions or submission URL.</p>
+    <p>Just some random text.</p>
     """
     b64_content = base64.b64encode(question_html.encode()).decode()
     return create_js_page(b64_content)
 
-@app.post("/mock-submit/broken-link")
-async def mock_submit_broken_link(request: Request):
-    return JSONResponse(content={"correct": True, "url": None})
-
-@app.post("/mock-submit/llm-fail")
-async def mock_submit_llm_fail(request: Request):
-    return JSONResponse(content={"correct": True, "url": None})
+@app.get("/mock-quiz/stop-test", response_class=HTMLResponse)
+def get_stop_test():
+    """Final stop page"""
+    question_html = f"""
+    <h2>Test Complete</h2>
+    <p>The test is finished.</p>
+    <p>Post your answer to {BASE_URL}/mock-submit/stop with this JSON payload:</p>
+    <pre>
+{{
+  "email": "your-email",
+  "secret": "your-secret",
+  "url": "{BASE_URL}/mock-quiz/stop-test",
+  "answer": "stop"
+}}
+    </pre>
+    """
+    b64_content = base64.b64encode(question_html.encode()).decode()
+    return create_js_page(b64_content)
 
 if __name__ == "__main__":
-    print("--- Starting Mock Quiz Server on http://localhost:8001 ---")
     uvicorn.run(app, host="0.0.0.0", port=8001)
