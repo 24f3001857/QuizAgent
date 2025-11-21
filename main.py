@@ -234,7 +234,11 @@ async def run_agent_chain(start_url: str, email: str, secret: str):
             if csv_url:
                 answer = await answer_csv_sum(client, csv_url)
             elif txt_url:
-                answer = await answer_txt_secret(client, txt_url)
+                # Check if it's actually a PDF
+                if txt_url.lower().endswith(".pdf"):
+                     answer = await answer_pdf(client, txt_url, page_inner[-1000:])
+                else:
+                     answer = await answer_txt_secret(client, txt_url)
             elif img_url:
                 logger.info(f"Image found: {img_url}. Sending to Gemini.")
                 answer = await answer_image_gemini(client, img_url, page_inner[-1000:])
@@ -309,7 +313,7 @@ async def answer_csv_sum(client, url):
 
 async def answer_txt_secret(client, url):
     try:
-        logger.info(f"Processing TXT/PDF: {url}")
+        logger.info(f"Processing TXT: {url}")
         resp = await client.get(url)
         # Look for a word in quotes, common for secrets
         m = re.search(r"the secret word is ['\"]([A-Za-z0-9\-]+)['\"]", resp.text, re.IGNORECASE)
@@ -322,3 +326,35 @@ async def answer_txt_secret(client, url):
     except Exception as e:
         logger.error(f"Error processing TXT {url}: {e}")
         return "error"
+
+async def answer_pdf(client, url, question_context):
+    try:
+        import pypdf
+        logger.info(f"Processing PDF: {url}")
+        resp = await client.get(url)
+        pdf_file = io.BytesIO(resp.content)
+        reader = pypdf.PdfReader(pdf_file)
+        
+        text_content = ""
+        for page in reader.pages:
+            text_content += page.extract_text() + "\n"
+            
+        logger.info(f"Extracted PDF Text (first 500 chars): {text_content[:500]}...")
+        
+        # Use LLM to answer the question based on PDF content
+        prompt = f"""
+        Answer the question based on the following PDF content.
+        Question: {question_context}
+        
+        PDF Content:
+        {text_content[:10000]} # Limit context size
+        
+        Return a JSON object with a single key "answer".
+        """
+        
+        data = await query_groq(client, prompt)
+        return data.get("answer") if data else "Error processing PDF"
+        
+    except Exception as e:
+        logger.error(f"Error processing PDF {url}: {e}")
+        return "Error"

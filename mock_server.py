@@ -25,15 +25,6 @@ DUMMY_PDF = os.path.join(DEMO_FILES_DIR, "dummy_doc.pdf")
 
 
 # --- 1. FAKE DATA ENDPOINTS ---
-@app.get("/files/local_cities.csv")
-def get_local_csv():
-    csv_content = """ID,Name,Population
-1,New York,8175133
-2,Los Angeles,3792621
-3,Chicago,2695598
-4,Houston,2100263"""
-    return Response(content=csv_content.strip(), media_type="text/csv")
-
 @app.get("/files/sales.csv")
 def get_sales_csv():
     if os.path.exists(DUMMY_CSV):
@@ -139,31 +130,20 @@ def create_js_page(b64_content: str):
 
 @app.get("/", response_class=HTMLResponse)
 def get_test_html():
-    """Serves the main `test.html`."""
-    test_html_path = os.path.join(ROOT_DIR, "test.html")
-    
-    if os.path.exists(test_html_path):
-        with open(test_html_path, "r", encoding="utf-8") as f:
-            html_content = f.read()
-    else:
-        # Q0: Start - Simple text answer
-        html_content = f"""
+    """Serves the main `html`."""
+    html_content = f"""
         <h2>Q0. The Start of the Test</h2>
         <p>This is the first task. The answer is simply the string "start".</p>
         <p>Post your answer to {BASE_URL}/mock-submit/start with this JSON payload:</p>
         <pre>
-{{
-  "email": "your-email",
-  "secret": "your-secret",
-  "url": "{BASE_URL}/",
-  "answer": "start"
-}}
+    {{
+    "email": "your-email",
+    "secret": "your-secret",
+    "url": "{BASE_URL}/",
+    "answer": "start"
+    }}
         </pre>
         """
-
-    # --- FIX: AUTO-REPLACE LOCALHOST ---
-    # This ensures that even if test.html has 'localhost', it gets swapped for the tunnel URL.
-    html_content = html_content.replace("http://localhost:8001", BASE_URL)
     
     b64_content = base64.b64encode(html_content.encode()).decode()
     return create_js_page(b64_content)
@@ -234,7 +214,7 @@ def get_pdf_quiz():
     question_html = f"""
     <h2>Q4. PDF Document</h2>
     <p>Download <a href="{BASE_URL}/files/dummy_doc.pdf">PDF document</a>.</p>
-    <p>What information is contained in the PDF?</p>
+    <p>What is the sum of the values of measurement B&C in page 2m in the data table?</p>
     <p>Post your answer to {BASE_URL}/mock-submit/pdf with this JSON payload:</p>
     <pre>
 {{

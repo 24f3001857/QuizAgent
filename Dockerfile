@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy application code
-COPY main.py /app/main.py
+COPY . /app
 
 # Expose port and run
 EXPOSE 8080
