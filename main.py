@@ -324,9 +324,61 @@ async def run_agent_chain(start_url: str, email: str, secret: str):
                         logger.info(f"Continuing to next URL despite wrong answer: {next_url}")
                         current_url = next_url
                     else:
-                        # No next URL and wrong answer - quiz is over
-                        logger.warning("No next URL provided. Quiz ended.")
-                        break
+                        # No next URL - attempt retry with LLM feedback
+                        logger.warning(f"No next URL. Attempting retry with feedback: {reason}")
+                        logger.info(f"Previous wrong answer was: {answer}")
+                        
+                        # Re-attempt with LLM feedback about the incorrect answer
+                        retry_prompt = f"""
+                        The previous answer was INCORRECT. The system said: "{reason}"
+                        
+                        Original Question Context:
+                        {page_inner[-2000:]}
+                        
+                        Previous answer that was wrong: {answer}
+                        
+                        Please analyze why the answer was wrong and provide a CORRECTED answer.
+                        Return a JSON object with a single key "answer".
+                        """
+                        
+                        retry_data = await query_groq(client, retry_prompt)
+                        retry_answer = retry_data.get("answer") if retry_data else None
+                        
+                        if retry_answer and retry_answer != answer:
+                            # Process and re-submit
+                            retry_answer = process_answer(retry_answer)
+                            logger.info(f"Retry attempt with new answer: {retry_answer}")
+                            
+                            retry_payload = {"email": email, "secret": secret, "url": current_url, "answer": retry_answer}
+                            retry_resp = await client.post(submit_url, json=retry_payload)
+                            
+                            if retry_resp.status_code == 200:
+                                retry_res = retry_resp.json()
+                                logger.info(f"Retry response: {retry_res}")
+                                
+                                if retry_res.get("correct"):
+                                    logger.info("✓ Retry successful!")
+                                    retry_next = retry_res.get("url")
+                                    if retry_next:
+                                        current_url = retry_next
+                                    else:
+                                        logger.info("Quiz complete after retry!")
+                                        break
+                                else:
+                                    logger.warning(f"Retry also failed: {retry_res.get('reason')}")
+                                    # Move to next URL if provided in retry response, otherwise end
+                                    retry_next = retry_res.get("url")
+                                    if retry_next:
+                                        current_url = retry_next
+                                    else:
+                                        logger.warning("No next URL after retry. Quiz ended.")
+                                        break
+                            else:
+                                logger.error(f"Retry submission failed with status {retry_resp.status_code}")
+                                break
+                        else:
+                            logger.warning("LLM could not generate different answer. Ending quiz.")
+                            break
             except httpx.RequestError as e:
                 logger.error(f"Request error during submission to {submit_url}: {e}")
                 break
